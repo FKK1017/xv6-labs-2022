@@ -707,3 +707,23 @@ procdump(void)
     printf("\n");
   }
 }
+
+int pageaccess(uint64 buf, int pages, uint64 abits) {
+  //buf: start page address of page table
+  uint res=0;
+  if (buf > MAXVA) {
+    panic("pageaccess: too large virtual address");
+  }
+  if (pages > 32) {
+    panic("pageaccess: too many pages");
+  }
+  struct proc* p = myproc();
+  for (int i=0; i<pages; i++) {
+    pte_t* pte = walk(p->pagetable, buf+i*PGSIZE, 0);
+    if ((*pte & PTE_V) && (*pte & PTE_A)) {
+      res |= (1L << i);
+      *pte ^= PTE_A;
+    }
+  }
+  return copyout(p->pagetable, abits, (char*)&res, sizeof(uint));
+}
