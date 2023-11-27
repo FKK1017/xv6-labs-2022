@@ -99,9 +99,10 @@ sys_sigalarm(void)
   uint64 handler;
   argint(0, &ticks);
   argaddr(1, &handler);
-  myproc()->ticks = ticks;
-  myproc()->handler = handler;
-  myproc()->returned = 1;
+  struct proc *p = myproc();
+  p->ticks = ticks;
+  p->handler = handler;
+  p->returned = 1;
   return 0;
 }
 
@@ -110,7 +111,7 @@ sys_sigreturn()
 {
   //return 0;
   struct proc *p = myproc();
-  p->trapframe = p->saved_trapframe;
+  *p->trapframe = p->saved_trapframe;
   p->returned = 1;
   return p->trapframe->a0;
 }
