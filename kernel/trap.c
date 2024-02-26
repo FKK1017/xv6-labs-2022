@@ -11,6 +11,9 @@ uint ticks;
 
 extern char trampoline[], uservec[], userret[];
 
+extern int pageRefCount[];
+extern struct spinlock pageRefLock;
+
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
 
@@ -27,6 +30,46 @@ void
 trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
+}
+
+int
+cowhandler(uint64 va, pagetable_t cur)
+{
+  pte_t *pte;
+  if ((pte = walk(cur, va, 0)) == 0) {
+    printf("cowhandler: pte should exist\n");
+    return -1;
+  }
+  if ((*pte & PTE_V) == 0) {
+    printf("cowhanlder: page not present\n");
+    return -1;
+  }
+  if ((*pte & PTE_U) == 0) {
+    printf("cowhanlder: page not user page\n");
+    return -1;
+  }
+  if ((*pte & PTE_COW) == 0) {
+    printf("cowhanlder: page not cow page\n");
+    return -1;
+  }
+  
+  uint64 pa = PTE2PA(*pte);
+  uint flags = PTE_FLAGS(*pte);
+  char *mem;
+
+  if ((mem = kalloc()) == 0) {
+    printf("cowhanlder: new page error");
+    return -1;
+  }
+
+  memmove(mem, (char*)pa, PGSIZE);
+
+  kfree((void*)pa);
+
+  *pte = PA2PTE(mem) | flags | PTE_W;
+  *pte &= ~PTE_COW;
+
+  return 0;
 }
 
 //
@@ -65,6 +108,16 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if (r_scause() == 15) {
+    uint64 va = r_stval();
+    if (va < p->sz && va < MAXVA) {
+      int ret = cowhandler(va, p->pagetable);
+      if (ret != 0) {
+        setkilled(p);
+      }
+    } else {
+      setkilled(p);
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

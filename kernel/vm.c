@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -14,6 +16,9 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+
+extern int pageRefCount[];
+extern struct spinlock pageRefLock;
 
 // Make a direct-map page table for the kernel.
 pagetable_t
@@ -308,23 +313,50 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
-  for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
+  // for(i = 0; i < sz; i += PGSIZE){
+  //   if((pte = walk(old, i, 0)) == 0)
+  //     panic("uvmcopy: pte should exist");
+  //   if((*pte & PTE_V) == 0)
+  //     panic("uvmcopy: page not present");
+  //   pa = PTE2PA(*pte);
+  //   flags = PTE_FLAGS(*pte);
+  //   if((mem = kalloc()) == 0)
+  //     goto err;
+  //   memmove(mem, (char*)pa, PGSIZE);
+  //   if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+  //     kfree(mem);
+  //     goto err;
+  //   }
+  // }
+  // return 0;
+
+  for (i=0; i<sz; i+=PGSIZE) {
+    if ((pte=walk(old, i, 0)) == 0) {
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
+    }
+    if((*pte & PTE_V) == 0) {
       panic("uvmcopy: page not present");
+    }
+    
+    if (*pte & PTE_W) {
+      // set to read-only
+      *pte &= ~PTE_W;
+      // set to cow
+      *pte |= PTE_COW;
+    }
+    // ref count +1
     pa = PTE2PA(*pte);
+    acquire(&pageRefLock);
+    pageRefCount[(uint64)pa / PGSIZE] += 1;
+    release(&pageRefLock);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    if (mappages(new, i, PGSIZE, (uint64)pa, flags) != 0) {
       goto err;
     }
   }
+
   return 0;
 
  err:
@@ -345,6 +377,12 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+int
+checkCOW(uint64 va, struct proc *p, pte_t *pte)
+{
+  return (va < p->sz) && (*pte & PTE_V) && (*pte & PTE_COW);
+}
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -358,6 +396,32 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+
+    struct proc *p = myproc();
+    pte_t *pte;
+    if ((pte = walk(pagetable, va0, 0)) == 0) {
+      printf("copyout: pte should exist\n");
+      return -1;
+    }
+    if (checkCOW(va0, p, pte)) {
+      char *mem;
+      if ((mem = kalloc()) == 0) {
+        printf("copyout: new page error\n");
+        setkilled(p);
+      } else {
+        memmove(mem, (char*)pa0, PGSIZE);
+      
+        uint flags = PTE_FLAGS(*pte);
+
+        uvmunmap(pagetable, va0, 1, 1);
+
+        *pte = PA2PTE(mem) | flags | PTE_W;
+        *pte &= ~PTE_COW;
+
+        pa0 = (uint64)mem;
+      }      
+    }
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
