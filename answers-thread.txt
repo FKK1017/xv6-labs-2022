@@ -1,0 +1,12 @@
+发生哈希碰撞，put()会调用insert(int key, int value, struct entry **p, struct entry *n)，
+多线程的情况下会同时调用，而n的值相同，此时只会有一个e->next = n成功，导致漏插键值对。
+
+static void 
+insert(int key, int value, struct entry **p, struct entry *n)
+{
+  struct entry *e = malloc(sizeof(struct entry));
+  e->key = key;
+  e->value = value;
+  e->next = n;
+  *p = e;
+}

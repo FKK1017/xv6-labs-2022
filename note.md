@@ -1,41 +1,40 @@
-# Copy on Write
+# Multithreading
 
-## Problem
+## Uthread: switching between threads
 
-不是所有时候`fork()`的子进程都需要复制父级进程的页面，只有某一方需要写入的时候需要独立的页面供自己使用
+为用户级线程系统设计实现上下文切换机制：`user/uthread.c`, `user/uthread_switch.S`。需要制定一个计划来创建线程并保存/恢复寄存器以在线程之间切换。
 
-## Solution
+### Solution
 
-COW的目标是推迟分配和复制物理内存页，直到需要实际副本
+`user/uthread.c: thread_create(), thread_schedule(); user/uthread_switch.S: thread_switch`
 
-COW `fork()`只为子进程创建一个页表(pte)，用户内存的PTE指向父进程的物理页。所有涉及COW `fork()`的进程的PTE都是只读的，当任一进程尝试写入其中一个COW页时，CPU将发生页错误。内核页面错误处理程序检测到这种情况，为错误进程分配物理内存页面，将原始页面复制到新页面，并修改错误进程中的相关PTE以引用新页面，这次使用PTE标记为可写。当页面错误处理程序返回时，用户进程将能够写入其页面副本。
+两个目标：
+1. 确保`thread_schedule()`第一次运行给定线程时，该线程在其自己的堆栈上执行传递给`thread_create()`的函数
+2. 确保`thread_switch`保存被切换的线程的寄存器，恢复被切换到的线程的寄存器，并返回到后一个线程的指令中最后离开的点(sp)
+   1. 决定在哪里保存/恢复寄存器
+   2. 修改`struct thread`来保存寄存器
+   3. 在`thread_schedule()`中添加对`thread_switch`的调用
+   4. 可以给`thread_switch`传参数
 
-由于多个COW`fork()`进程可能共享一个物理页面，因此对其的释放需要当且仅当最后一个引用消失时才释放（需要一个引用计数）。
+### Implemetation
 
-## Implemetation
+实现一个用户级别的上下文切换：
+1. 首先线程要有自己的上下文结构体context
+2. 创建线程时，设置线程的ra和sp寄存器
+3. 上下文切换就是保存和加载寄存器，和内核级完全一致
 
-涉及如下几个方面：
-1. 需要一个引用计数来标记物理页面被多少个进程共享，`kalloc()`和`kfree()`是有关分配和释放页的方法
-2. 需要在`fork()`时将原始页更改为COW页，并且让父子进程共享该页面，`uvmcopy()`是用来复制页面的方法
-   1. 需要标记某个页面是否是COW页，PTE的RSW位可以使用
-   2. 只有当父级进程的页是可写的页时，才将其转换为COW页并只读
-   3. 此处需要对页面引用计数+1
-3. 需要在页面错误处理程序处检测到写COW页的错误，`usertrap()`是处理中断的方法
-   1. 通过`r_scause()`判断错误类型，页错误是`0xf`
-   2. 需要在这里分配一个新页，将旧页复制过来，并将新页安装到对应的PTE中，同时将PTE设置为可写，取消RSW位
-   3. 可以参考原始的`uvmcopy()`方法
-   4. 需要检查是不是可以处理的cow错误，考虑以下几点
-      1. `va < p->sz`，发生错误的虚拟地址在现在进程的进程内存内
-      2. `va < MAXVA`，发生错误的虚拟地址在可允许的内存内
-      3. 检查pte的标志位
-   5. 装入新页的做法实际上是修改pte
-   6. 应该`kfree()`之前的页一次，因为复制了新的
-4. 修改`copyout()`以在遇到COW页面时使用与页错误相同的方案
-5. 当没有空闲内存时发生COW页错误应终止进程
+## Using threads
 
-## Hints
+使用哈希表探索线程和锁的并行编程，在WSL下运行（不是qemu），使用`pthread`库，多线程的情况下出现哈希碰撞不能很好的解决
 
-1. 有关引用计数的变量存在于`kalloc.c`，需要`extern`或者声明一个方法来在别的地方使用
-2. cow的本质是把原来`uvmcopy()`中分配新页的部分放到触发写错误中断时候做了
-3. RISC-V 中的 stval (Supervisor Trap Value (stval) Register ) 寄存器中的值是导致发生异常的虚拟地址。vx6 中的函数 r_stval() 可以获取该寄存器的值
-4. 
+### Solution
+
+给哈希表加锁，两种思路：
+1. 每次`put/insert`都给整个哈希表加锁
+2. 每次`put/insert`只给对应哈希表的bucket加锁(?)
+
+### Implemetation
+
+
+
+## Barrier
