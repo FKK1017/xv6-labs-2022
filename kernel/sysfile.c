@@ -333,6 +333,60 @@ sys_open(void)
       end_op();
       return -1;
     }
+    else if (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW))
+    {
+      // read link file
+      // inumset[0] = ip->inum;
+      // struct inode *link = symlinkfind(ip, 0);
+      // if (link==0) {
+      //   printf("c4\n");
+      //   iunlockput(ip);
+      //   end_op();
+      //   return -1;
+      // }
+      // printf("c5\n");
+      // //iunlockput(ip);
+      // ip = link;
+      // printf("c\n");
+      int max_times = 10;
+      while (max_times > 0 && ip->type == T_SYMLINK)
+      {
+        char target[MAXPATH];
+        int len;
+        len = readi(ip, 0, (uint64)target, 0, MAXPATH);
+        if (len != ip->size)
+        {
+          printf("no file\n");
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+
+        iunlockput(ip);
+        ip = namei(target);
+        if (ip == 0)
+        {
+          printf("no file1\n");
+          end_op();
+          return -1;
+        }
+
+        ilock(ip);
+        if (ip->type != T_SYMLINK)
+        {
+          break;
+        }
+
+        max_times--;
+        if (max_times == 0)
+        {
+          printf("cycle\n");
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+      }
+    }
   }
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
@@ -506,5 +560,30 @@ sys_pipe(void)
 
 uint64
 sys_symlink(void) {
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+  uint len;
+  if ((len = argstr(0, target, MAXPATH)) < 0 || argstr(1, path, MAXPATH) < 0) {
+    return -1;
+  }
+
+  begin_op();
+
+  if ((ip = create(path, T_SYMLINK, 0, 0)) == 0) {
+    end_op();
+    return -1;
+  }
+
+  //ilock(ip);
+  if (writei(ip, 0, (uint64)target, 0, len) != len) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  
+  // printf("symlinkf\n");
   return 0;
 }
