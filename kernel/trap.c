@@ -5,6 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -27,6 +29,51 @@ void
 trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
+}
+
+uint64
+mmap_helper(uint64 va) {
+  struct proc *p = myproc();
+  int vmaIndex;
+  for (vmaIndex=0; vmaIndex<VMACOUNT; vmaIndex++) {
+    if (p->pvma[vmaIndex].addr<=va && va<p->pvma[vmaIndex].addr+p->pvma[vmaIndex].length) {
+      break;
+    }
+  }
+
+  if (vmaIndex == VMACOUNT) {
+    return 0;
+  }
+
+  void *new_mem;
+  if ((new_mem = kalloc()) == 0) {
+    return 0;
+  }
+
+  int flags = PTE_U;
+  int vmaprot = p->pvma[vmaIndex].prot;
+  if (vmaprot & PROT_READ) flags |= PTE_R;
+  if (vmaprot & PROT_WRITE) flags |= PTE_W;
+  if (vmaprot & PROT_EXEC) flags |= PTE_X;
+  
+  if (mappages(p->pagetable, va, PGSIZE, (uint64)new_mem, flags) == -1) {
+    kfree(new_mem);
+    return 0;
+  }
+
+  int offset = p->pvma[vmaIndex].offset;
+  struct inode *ip = p->pvma[vmaIndex].fd->ip;
+  ilock(ip);
+  if (p->pvma[vmaIndex].length - offset > PGSIZE) {
+    // readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
+    readi(ip, 1, va, offset, PGSIZE);
+  } else {
+    readi(ip, 1, va, offset, p->pvma[vmaIndex].length - offset);
+  }
+  p->pvma[vmaIndex].offset += PGSIZE;
+  iunlock(ip);
+
+  return (uint64)new_mem;
 }
 
 //
@@ -65,7 +112,14 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } else if (r_scause() == 13 || r_scause() == 15) {
+    // load page fault or Store/AMO page fault
+    // 发生页错误的时候知道缺页的地址
+    if (mmap_helper(r_stval()) == 0) {
+      printf("fail in mmap page\n");
+      setkilled(p);
+    }
+  }else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
