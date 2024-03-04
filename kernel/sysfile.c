@@ -551,7 +551,7 @@ sys_mmap(void)
   p->pvma[vmaIndex].offset = offset;
   filedup(f);
 
-  return 0;
+  return addr;
   
 }
 

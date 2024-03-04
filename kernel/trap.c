@@ -5,6 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
 #include "file.h"
 #include "fcntl.h"
 
@@ -49,6 +51,8 @@ mmap_helper(uint64 va) {
   if ((new_mem = kalloc()) == 0) {
     return 0;
   }
+
+  memset(new_mem, 0, PGSIZE);
 
   int flags = PTE_U;
   int vmaprot = p->pvma[vmaIndex].prot;
