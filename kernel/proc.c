@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -287,7 +288,7 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
-
+  // printf("c0\n");
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -295,7 +296,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
-
+  // printf("c1\n");
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -311,6 +312,14 @@ fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
+
+    // copy mmap
+  for (i=0; i<VMACOUNT; i++) {
+    if (p->pvma[i].addr != 0) {
+      np->pvma[i] = p->pvma[i];
+      filedup(p->pvma[i].fd);
+    }
+  }
 
   release(&np->lock);
 
@@ -358,6 +367,27 @@ exit(int status)
       fileclose(f);
       p->ofile[fd] = 0;
     }
+  }
+
+  // unmap all mapped regions
+  int vmaIndex;
+  for (vmaIndex=0; vmaIndex<VMACOUNT; vmaIndex++) {
+    if (p->pvma[vmaIndex].addr==0) {
+      continue;
+    }
+    if (walkaddr(p->pagetable, p->pvma[vmaIndex].addr) == 0) {
+      // printf("exit\n");
+      continue;
+    }
+
+    if (p->pvma[vmaIndex].flags & MAP_SHARED) {
+      filewrite(p->pvma[vmaIndex].fd, p->pvma[vmaIndex].addr, p->pvma[vmaIndex].length);
+    }
+
+    uvmunmap(p->pagetable, p->pvma[vmaIndex].addr, PGROUNDUP(p->pvma[vmaIndex].length) / PGSIZE, 1);
+
+    fileclose(p->pvma[vmaIndex].fd);
+    p->pvma[vmaIndex].addr = 0;
   }
 
   begin_op();

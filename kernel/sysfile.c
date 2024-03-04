@@ -558,5 +558,43 @@ sys_mmap(void)
 uint64
 sys_munmap(void)
 {
+  uint64 addr;
+  int length;
+  argaddr(0, &addr);
+  argint(1, &length);
+
+  struct proc *p = myproc();
+  int vmaIndex;
+  for (vmaIndex=0; vmaIndex<VMACOUNT; vmaIndex++) {
+    if (p->pvma[vmaIndex].addr<=addr && addr<p->pvma[vmaIndex].addr+p->pvma[vmaIndex].length) {
+      break;
+    }
+  }
+
+  if (vmaIndex==VMACOUNT) {
+    printf("no vma\n");
+    return -1;
+  }
+
+  struct vma *curvma = &p->pvma[vmaIndex];
+
+  if (walkaddr(p->pagetable, addr) == 0) {
+    printf("not mapped\n");
+    return 0;
+  }
+
+  if (curvma->flags & MAP_SHARED) {
+    filewrite(curvma->fd, addr, length);
+  }
+
+  uvmunmap(p->pagetable, addr, PGROUNDUP(length)/PGSIZE, 1);
+  if (PGROUNDUP(length) > curvma->length) {
+    fileclose(curvma->fd);
+    curvma->addr = 0;
+  } else {
+    curvma->addr += PGROUNDUP(length);
+    curvma->length -= PGROUNDUP(length);
+  }
+
   return 0;
 }

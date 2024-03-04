@@ -54,7 +54,7 @@ mmap_helper(uint64 va) {
 
   memset(new_mem, 0, PGSIZE);
 
-  int flags = PTE_U;
+  int flags = PTE_U; // 设置PTE_V会remap
   int vmaprot = p->pvma[vmaIndex].prot;
   if (vmaprot & PROT_READ) flags |= PTE_R;
   if (vmaprot & PROT_WRITE) flags |= PTE_W;
@@ -65,7 +65,7 @@ mmap_helper(uint64 va) {
     return 0;
   }
 
-  int offset = p->pvma[vmaIndex].offset;
+  int offset = va - p->pvma[vmaIndex].addr; // 偏移量不是vma里的offset
   struct inode *ip = p->pvma[vmaIndex].fd->ip;
   ilock(ip);
   if (p->pvma[vmaIndex].length - offset > PGSIZE) {
